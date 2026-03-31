@@ -1,0 +1,89 @@
+name: Build Signed APK & AAB
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.41.6"
+  JAVA_VERSION: "17"
+
+jobs:
+  build:
+    name: Build Release APK & AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Java ──────────────────────────────────────────────────
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      # ── Flutter ───────────────────────────────────────────────
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      # ── Decode keystore from secrets ──────────────────────────
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.DontTapOpBase64 }}" | base64 --decode > "${{ github.workspace }}/android/app/keystore.jks"
+
+      # ── Write key.properties ──────────────────────────────────
+      - name: Create key.properties
+        run: |
+          printf '%s\n' \
+            "storePassword=${{ secrets.DontTapOpStorePassword }}" \
+            "keyPassword=${{ secrets.DontTapOpKeyPassword }}" \
+            "keyAlias=${{ secrets.DontTapOpKeyAlias }}" \
+            "storeFile=${{ github.workspace }}/android/app/keystore.jks" \
+            > "${{ github.workspace }}/android/key.properties"
+
+      # ── Build signed APK (release) ───────────────────────────
+      - name: Build release APK
+        run: flutter build apk --release
+
+      # ── Build signed AAB (release) ───────────────────────────
+      - name: Build release AAB
+        run: flutter build appbundle --release
+
+      # ── Upload APK artifact ───────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── Upload AAB artifact ───────────────────────────────────
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── Cleanup secrets from runner (runs even if build fails) ─
+      - name: Remove keystore and key.properties
+        if: always()
+        run: |
+          rm -f "${{ github.workspace }}/android/app/keystore.jks"
+          rm -f "${{ github.workspace }}/android/key.properties"
